@@ -108,7 +108,7 @@ const SENSITIVITY = 0.4;
 const MAX_ANGLE = 40; 
 
 // *** URL DEPLOYMENT APPS SCRIPT ANDA (URL yang Anda berikan) ***
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxfRbFOjS4umUzxJqiWdV955NKxied0qd6tEGcyeRsWY_lCs0Jfsyfz7Zv611XGReU/exec'; 
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyu7oZrPtv841FvD6PToUgNxR0UHrjvXaKMDNkO7xoto6Pq2FS2aLGiWaXhV4QVvLHI/exec'; 
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const SpeechSynthesis = window.speechSynthesis;
@@ -250,6 +250,7 @@ function speakResponse(text) {
         talkButton.disabled = !SpeechRecognition;
         sendButton.disabled = false;
         refreshButton.disabled = false;
+        chatInput.disabled = false; // <<< PERBAIKAN 1: Re-enable chatInput saat TTS tidak didukung
         if (!hasGreeted) hasGreeted = true;
         if (isListening) startListening();
         else statusText.textContent = 'Siap. Tekan "Mulai Bicara" atau ketik pesan.';
@@ -271,10 +272,11 @@ function speakResponse(text) {
         setMouthSpeaking(false);
         isProcessing = false; 
         
-        // Re-enable tombol
+        // Re-enable tombol & input
         talkButton.disabled = !SpeechRecognition; 
         sendButton.disabled = false;
         refreshButton.disabled = false; 
+        chatInput.disabled = false; // <<< PERBAIKAN 2: Re-enable chatInput setelah selesai bicara
         
         if (!hasGreeted) hasGreeted = true;
 
@@ -290,11 +292,12 @@ function speakResponse(text) {
          setMouthSpeaking(false);
          isProcessing = false;
          
-         // Re-enable tombol
+         // Re-enable tombol & input (saat error)
          talkButton.disabled = !SpeechRecognition;
          sendButton.disabled = false;
          refreshButton.disabled = false; 
-
+         chatInput.disabled = false; // <<< PERBAIKAN 3: Re-enable chatInput saat error
+         
          statusText.textContent = 'Error Suara. Siap.';
          if (isListening) startListening();
     };
@@ -340,17 +343,13 @@ async function getGeminiReply(userCommand) {
     
     const requestBody = {
         userCommand: userCommand,
-        history: CONVERSATION_HISTORY // Kirim seluruh riwayat percakapan untuk konteks
+        history: CONVERSATION_HISTORY
     };
 
     try {
         const response = await fetch(APPS_SCRIPT_URL, {
             method: 'POST',
-            // --- INI PERBAIKAN CORS/FETCH UTAMA ---
-            // Menghapus header Content-Type agar browser menggunakan 'Content-Type: text/plain' 
-            // atau 'application/x-www-form-urlencoded' default, yang lebih ramah CORS
-            // jika Apps Script disetel ke "Anyone".
-            // headers: { 'Content-Type': 'application/json' }, // DIHAPUS
+            // Headers dihapus untuk perbaikan CORS/Failed to fetch
             body: JSON.stringify(requestBody),
         });
 
@@ -360,8 +359,6 @@ async function getGeminiReply(userCommand) {
         try {
             data = JSON.parse(textResponse);
         } catch (e) {
-            // Jika GAGAL parse JSON, berarti itu adalah HTML Error Page dari Apps Script.
-            // Ini terjadi jika Apps Script merespons non-JSON (HTML Error)
             throw new Error(`Koneksi Gagal/Izin Salah. Server mengembalikan non-JSON: ${textResponse.substring(0, 50)}...`);
         }
         
@@ -382,9 +379,8 @@ async function getGeminiReply(userCommand) {
         talkButton.disabled = !SpeechRecognition;
         sendButton.disabled = false;
         refreshButton.disabled = false; 
-        chatInput.disabled = false;
+        chatInput.disabled = false; // Pastikan input aktif walau ada error fetch
 
-        // Penanganan error Failed to fetch yang lebih jelas
         let errorMsg = error.message;
         if (errorMsg.includes("Failed to fetch")) {
              errorMsg = "Gagal terhubung ke Apps Script (Masalah Jaringan/CORS).";
@@ -427,7 +423,7 @@ async function clearChatAndHistory() {
         talkButton.disabled = !SpeechRecognition;
         sendButton.disabled = false;
         refreshButton.disabled = false;
-        chatInput.disabled = false;
+        chatInput.disabled = false; // Diaktifkan kembali setelah Reset
     }
 }
 
@@ -445,7 +441,7 @@ async function handleTextCommand(command) {
     talkButton.disabled = true;
     sendButton.disabled = true;
     refreshButton.disabled = true; 
-    chatInput.disabled = true; 
+    chatInput.disabled = true; // Dinonaktifkan selama pemrosesan
     
     const commandToProcess = command.trim();
     chatInput.value = ''; 
@@ -459,7 +455,7 @@ async function handleTextCommand(command) {
     } catch (error) {
         console.error("Text command failed:", error);
     } finally {
-        // Kontrol tombol akan di-enable di speakResponse
+        // Kontrol input di-handle di speakResponse
     }
 }
 
@@ -484,7 +480,7 @@ if (SpeechRecognition) {
         talkButton.textContent = 'Mulai Bicara (Mic)';
         sendButton.disabled = false; 
         refreshButton.disabled = false; 
-        chatInput.disabled = false; 
+        chatInput.disabled = false; // Diaktifkan kembali setelah berhenti mendengarkan
         
         if (!isProcessing) { 
             statusText.textContent = 'Siap. Tekan "Mulai Bicara" atau ketik pesan.';
@@ -512,7 +508,7 @@ if (SpeechRecognition) {
         talkButton.disabled = false;
         sendButton.disabled = false; 
         refreshButton.disabled = false; 
-        chatInput.disabled = false; 
+        chatInput.disabled = false; // Diaktifkan kembali saat ada error Mic
         talkButton.textContent = 'Mulai Bicara (Mic)';
         
         if (event.error === 'no-speech') {
@@ -560,7 +556,7 @@ talkButton.addEventListener('click', () => {
         talkButton.disabled = false;
         sendButton.disabled = false;
         refreshButton.disabled = false;
-        chatInput.disabled = false;
+        chatInput.disabled = false; // Diaktifkan kembali saat Stop Bicara
     } else if (!isSpeaking && !isProcessing) {
         // Start (Langsung mulai mendengarkan)
         talkButton.disabled = true;
