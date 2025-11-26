@@ -108,6 +108,508 @@ const SENSITIVITY = 0.4;
 const MAX_ANGLE = 40; 
 
 // *** URL DEPLOYMENT APPS SCRIPT ANDA (URL yang Anda berikan) ***
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxfRbFOjS4umUzxJqiWdV955NKxied0qd6tEGcyeRsWY_lCs0Jfsyfz7Zv611XGReU/exec'; 
+
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const SpeechSynthesis = window.speechSynthesis;
+const SpeechSynthesisUtterance = window.SpeechSynthesisUtterance;
+let recognition;
+
+
+// =========================================================================
+//                             FUNGSI PERGERAKAN WAJAH
+// =========================================================================
+
+function blinkRandomly() {
+    if (isBlinking) return;
+    isBlinking = true;
+    const eyelids = document.querySelectorAll('.eyelid');
+    eyelids.forEach(eyelid => { eyelid.style.top = '0%'; });
+    setTimeout(() => {
+        eyelids.forEach(eyelid => { eyelid.style.top = '-100%'; });
+        isBlinking = false;
+    }, 100);
+}
+
+function setRandomBlinkInterval() {
+    const randomTime = Math.random() * 4000 + 3000;
+    setTimeout(() => {
+        blinkRandomly();
+        setRandomBlinkInterval();
+    }, randomTime);
+}
+
+function moveEyesRandomly() {
+    if (isListening || isSpeaking || isProcessing || gyroButton.disabled) {
+        setTimeout(moveEyesRandomly, Math.random() * 3000 + 2000); 
+        return;
+    }
+
+    const randomX = (Math.random() - 0.5) * 2 * IDLE_MOVEMENT_RANGE; 
+    const randomY = (Math.random() - 0.5) * 2 * IDLE_MOVEMENT_RANGE;
+
+    eyes.forEach(eye => {
+        const pupil = eye.querySelector('.pupil');
+        pupil.style.transform = `translate(${randomX}px, ${randomY}px)`;
+    });
+
+    setTimeout(moveEyesRandomly, Math.random() * 3000 + 2000);
+}
+
+function setMouthSpeaking(speaking) {
+    if (mouthInterval) clearInterval(mouthInterval);
+    isSpeaking = speaking;
+    
+    if (speaking) {
+        const pouUnit = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--unit'));
+        const minHeight = 4 * pouUnit;
+        const maxHeight = 10 * pouUnit; 
+
+        mouthInterval = setInterval(() => {
+            const mouthHeight = minHeight + Math.random() * (maxHeight - minHeight); 
+            mouth.style.height = `${mouthHeight}px`;
+
+            const scaleX = 0.8 + Math.random() * 0.4;
+            const scaleY = 1 + Math.random() * 2;
+            const translateY = Math.random() * 2 - 1; 
+
+            mouthInner.style.transform = `scaleX(${scaleX}) scaleY(${scaleY}) translateY(${translateY}px)`;
+        }, 80);
+    } else {
+        mouth.style.height = 'calc(512 * var(--unit) * 0.04)';
+        mouthInner.style.transform = `scaleX(1) scaleY(1) translateY(0px)`;
+    }
+}
+
+function setCharacterListening(listening) {
+    isListening = listening;
+    eyes.forEach(eye => {
+        if (listening) {
+            eye.classList.add('listening');
+        } else {
+            eye.classList.remove('listening');
+        }
+    });
+}
+
+// =========================================================================
+//                             FUNGSI GYROSCOPE
+// =========================================================================
+
+function handleDeviceOrientation(event) {
+    let beta = event.beta; 
+    let gamma = event.gamma;
+
+    beta = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, beta));
+    gamma = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, gamma));
+
+    const normalizedX = (gamma / MAX_ANGLE) * SENSITIVITY;
+    const normalizedY = (beta / MAX_ANGLE) * SENSITIVITY; 
+
+    const deltaX = normalizedX * MAX_PUPIL_DISTANCE;
+    const deltaY = -normalizedY * MAX_PUPIL_DISTANCE; 
+
+    eyes.forEach(eye => {
+        const pupil = eye.querySelector('.pupil');
+        pupil.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+    });
+}
+
+function requestSensorPermission() {
+    if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission()
+            .then(permissionState => {
+                if (permissionState === 'granted') {
+                    window.addEventListener('deviceorientation', handleDeviceOrientation);
+                    gyroButton.textContent = 'Sensor Gerak AKTIF';
+                    gyroButton.disabled = true;
+                    statusText.textContent = 'Arahkan HP Anda untuk menggerakkan mata!';
+                } else {
+                    statusText.textContent = 'Izin sensor gerak tidak diberikan.';
+                }
+            })
+            .catch(error => {
+                 statusText.textContent = 'Gagal mengaktifkan sensor. Coba di Chrome/Edge.';
+            });
+    } else {
+        window.addEventListener('deviceorientation', handleDeviceOrientation);
+        gyroButton.textContent = 'Sensor Gerak AKTIF';
+        gyroButton.disabled = true;
+        statusText.textContent = 'Arahkan HP Anda untuk menggerakkan mata!';
+    }
+}
+
+// =========================================================================
+//                          FUNGSI TTS NATIVE (SpeechSynthesis)
+// =========================================================================
+
+function speakResponse(text) {
+    if (!text || !SpeechSynthesis) {
+        // Jika TTS tidak didukung, langsung akhiri proses
+        isProcessing = false;
+        talkButton.disabled = !SpeechRecognition;
+        sendButton.disabled = false;
+        refreshButton.disabled = false;
+        if (!hasGreeted) hasGreeted = true;
+        if (isListening) startListening();
+        else statusText.textContent = 'Siap. Tekan "Mulai Bicara" atau ketik pesan.';
+        return;
+    }
+    
+    if (SpeechSynthesis.speaking) {
+        SpeechSynthesis.cancel();
+    }
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'id-ID'; 
+
+    utterance.onstart = () => {
+        setMouthSpeaking(true);
+    };
+    
+    utterance.onend = () => {
+        setMouthSpeaking(false);
+        isProcessing = false; 
+        
+        // Re-enable tombol
+        talkButton.disabled = !SpeechRecognition; 
+        sendButton.disabled = false;
+        refreshButton.disabled = false; 
+        
+        if (!hasGreeted) hasGreeted = true;
+
+        if (isListening) {
+             startListening(); 
+        } else {
+            statusText.textContent = 'Siap. Tekan "Mulai Bicara" atau ketik pesan.';
+        }
+    };
+
+    utterance.onerror = (event) => {
+         console.error('Speech Synthesis Error:', event.error);
+         setMouthSpeaking(false);
+         isProcessing = false;
+         
+         // Re-enable tombol
+         talkButton.disabled = !SpeechRecognition;
+         sendButton.disabled = false;
+         refreshButton.disabled = false; 
+
+         statusText.textContent = 'Error Suara. Siap.';
+         if (isListening) startListening();
+    };
+
+    SpeechSynthesis.speak(utterance);
+}
+
+
+// =========================================================================
+//                          FUNGSI LOGIKA GEMINI BARU (Via Apps Script)
+// =========================================================================
+
+function validateSetup() {
+    const micSupported = !!(SpeechRecognition && SpeechSynthesis);
+    
+    if (!micSupported) {
+        talkButton.textContent = 'Mic (Tidak Didukung)';
+        talkButton.disabled = true;
+    }
+
+    if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.trim() === '') {
+        statusText.innerHTML = '<span style="color:red; font-weight:bold;">Error: URL Apps Script masih kosong.</span>';
+        talkButton.disabled = true;
+        sendButton.disabled = true;
+        refreshButton.disabled = true; 
+        return false;
+    }
+    
+    if (!APPS_SCRIPT_URL.includes('/exec')) {
+        statusText.innerHTML = '<span style="color:red; font-weight:bold;">Error: URL Apps Script harus diakhiri dengan /exec. Periksa deployment.</span>';
+        talkButton.disabled = true;
+        sendButton.disabled = true;
+        refreshButton.disabled = true; 
+        return false;
+    }
+    
+    return true; 
+}
+
+async function getGeminiReply(userCommand) {
+    
+    statusText.textContent = 'Pou Berpikir...';
+    
+    const requestBody = {
+        userCommand: userCommand,
+        history: CONVERSATION_HISTORY // Kirim seluruh riwayat percakapan untuk konteks
+    };
+
+    try {
+        const response = await fetch(APPS_SCRIPT_URL, {
+            method: 'POST',
+            // --- INI PERBAIKAN CORS/FETCH UTAMA ---
+            // Menghapus header Content-Type agar browser menggunakan 'Content-Type: text/plain' 
+            // atau 'application/x-www-form-urlencoded' default, yang lebih ramah CORS
+            // jika Apps Script disetel ke "Anyone".
+            // headers: { 'Content-Type': 'application/json' }, // DIHAPUS
+            body: JSON.stringify(requestBody),
+        });
+
+        const textResponse = await response.text();
+
+        let data;
+        try {
+            data = JSON.parse(textResponse);
+        } catch (e) {
+            // Jika GAGAL parse JSON, berarti itu adalah HTML Error Page dari Apps Script.
+            // Ini terjadi jika Apps Script merespons non-JSON (HTML Error)
+            throw new Error(`Koneksi Gagal/Izin Salah. Server mengembalikan non-JSON: ${textResponse.substring(0, 50)}...`);
+        }
+        
+        if (data.status === 'error') {
+            throw new Error(data.reply || data.message || 'Kesalahan tak terduga dari server.');
+        }
+        
+        const replyText = data.reply;
+        
+        CONVERSATION_HISTORY = data.newHistory;
+        
+        return replyText;
+
+    } catch (error) {
+        console.error('Gemini Error (via Apps Script):', error);
+        
+        isProcessing = false; 
+        talkButton.disabled = !SpeechRecognition;
+        sendButton.disabled = false;
+        refreshButton.disabled = false; 
+        chatInput.disabled = false;
+
+        // Penanganan error Failed to fetch yang lebih jelas
+        let errorMsg = error.message;
+        if (errorMsg.includes("Failed to fetch")) {
+             errorMsg = "Gagal terhubung ke Apps Script (Masalah Jaringan/CORS).";
+        }
+        
+        statusText.textContent = `Pou: Kesalahan AI: ${errorMsg.substring(0, 80)}. Coba bersihkan obrolan.`;
+        return `Kesalahan AI: ${errorMsg.substring(0, 80)}. Coba bersihkan obrolan.`;
+    }
+}
+
+// FUNGSI BARU UNTUK MEMBERSIHKAN CHAT
+async function clearChatAndHistory() {
+    if (!validateSetup()) return;
+
+    isProcessing = true;
+    talkButton.disabled = true;
+    sendButton.disabled = true;
+    refreshButton.disabled = true;
+    chatInput.disabled = true;
+
+    try {
+        const response = await fetch(APPS_SCRIPT_URL, { 
+            method: 'POST', 
+            body: JSON.stringify({ action: 'clear' })
+        });
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+            CONVERSATION_HISTORY = []; 
+            chatInput.value = ''; 
+            transcriptText.textContent = 'Riwayat percakapan telah diatur ulang.';
+            statusText.textContent = 'Obrolan baru siap. Pou telah melupakan percakapan sebelumnya.';
+        } else {
+            throw new Error(data.message || "Gagal membersihkan riwayat di server.");
+        }
+    } catch (error) {
+        statusText.textContent = `Error Reset: ${error.toString()}`;
+    } finally {
+        isProcessing = false;
+        talkButton.disabled = !SpeechRecognition;
+        sendButton.disabled = false;
+        refreshButton.disabled = false;
+        chatInput.disabled = false;
+    }
+}
+
+
+// =========================================================================
+//                          FUNGSI INPUT TEKS & SPEECH RECOGNITION
+// =========================================================================
+
+async function handleTextCommand(command) {
+    if (isProcessing || isSpeaking) return;
+    if (!command.trim()) return;
+    if (!validateSetup()) return;
+
+    isProcessing = true; 
+    talkButton.disabled = true;
+    sendButton.disabled = true;
+    refreshButton.disabled = true; 
+    chatInput.disabled = true; 
+    
+    const commandToProcess = command.trim();
+    chatInput.value = ''; 
+    
+    transcriptText.textContent = `Anda: ${commandToProcess}`;
+
+    try {
+        const reply = await getGeminiReply(commandToProcess);
+        transcriptText.textContent = `Pou: ${reply}`;
+        speakResponse(reply); 
+    } catch (error) {
+        console.error("Text command failed:", error);
+    } finally {
+        // Kontrol tombol akan di-enable di speakResponse
+    }
+}
+
+if (SpeechRecognition) {
+    recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.lang = 'id-ID';
+    recognition.interimResults = false;
+
+    recognition.onstart = () => {
+        setCharacterListening(true);
+        talkButton.textContent = 'Mendengarkan... (Tekan untuk Stop)';
+        statusText.textContent = 'Silakan Bicara ke Pou...';
+        transcriptText.textContent = '';
+        sendButton.disabled = true; 
+        refreshButton.disabled = true; 
+        chatInput.disabled = true; 
+    };
+
+    recognition.onend = () => {
+        setCharacterListening(false);
+        talkButton.textContent = 'Mulai Bicara (Mic)';
+        sendButton.disabled = false; 
+        refreshButton.disabled = false; 
+        chatInput.disabled = false; 
+        
+        if (!isProcessing) { 
+            statusText.textContent = 'Siap. Tekan "Mulai Bicara" atau ketik pesan.';
+            talkButton.disabled = false;
+        }
+    };
+
+    recognition.onresult = async (event) => {
+        const command = event.results[0][0].transcript;
+        
+        isProcessing = true; 
+        talkButton.disabled = true; 
+        
+        const reply = await getGeminiReply(command);
+        
+        transcriptText.textContent = `Pou: ${reply}`;
+        speakResponse(reply); 
+    };
+
+    recognition.onerror = (event) => {
+        console.error('Speech Recognition Error:', event.error);
+        
+        setCharacterListening(false);
+        isProcessing = false;
+        talkButton.disabled = false;
+        sendButton.disabled = false; 
+        refreshButton.disabled = false; 
+        chatInput.disabled = false; 
+        talkButton.textContent = 'Mulai Bicara (Mic)';
+        
+        if (event.error === 'no-speech') {
+             statusText.textContent = 'Tidak ada ucapan terdeteksi. Coba lagi.';
+        } else if (event.error === 'not-allowed') {
+             statusText.textContent = 'Izin Mic Ditolak. Izinkan di pengaturan browser.';
+        } else {
+             statusText.textContent = `Mik Error: ${event.error}. Siap.`;
+        }
+    };
+    
+} 
+
+function startListening() {
+    if (!validateSetup()) return;
+    if (isProcessing || isSpeaking) return;
+
+    setTimeout(() => {
+        try {
+            recognition.start();
+        } catch (e) {
+            console.warn('Recognition start failed:', e);
+            talkButton.disabled = false;
+            statusText.textContent = 'Gagal mulai mendengarkan. Coba lagi.';
+        }
+    }, 100); 
+}
+
+// =========================================================================
+//                          INISIALISASI
+// =========================================================================
+
+gyroButton.addEventListener('click', requestSensorPermission);
+
+// LOGIKA TOMBOL BICARA
+talkButton.addEventListener('click', () => {
+    if (!validateSetup()) return;
+
+    if (isListening) {
+        // Stop: Feedback instan
+        recognition.stop();
+        setCharacterListening(false);
+        talkButton.textContent = 'Mulai Bicara (Mic)';
+        statusText.textContent = 'Dihentikan. Siap.';
+        talkButton.disabled = false;
+        sendButton.disabled = false;
+        refreshButton.disabled = false;
+        chatInput.disabled = false;
+    } else if (!isSpeaking && !isProcessing) {
+        // Start (Langsung mulai mendengarkan)
+        talkButton.disabled = true;
+        startListening();
+    }
+});
+
+// LOGIKA TOMBOL KIRIM
+sendButton.addEventListener('click', () => {
+    const command = chatInput.value;
+    handleTextCommand(command);
+});
+
+// LOGIKA TOMBOL BERSIHKAN CHAT
+refreshButton.addEventListener('click', clearChatAndHistory);
+
+chatInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+        event.preventDefault(); // Mencegah baris baru di input
+        sendButton.click();
+    }
+});
+
+
+window.addEventListener('load', () => {
+    setRandomBlinkInterval();
+    moveEyesRandomly();
+    
+    if (validateSetup()) {
+        statusText.innerHTML = 'Siap. Tekan "Mulai Bicara" atau ketik pesan.';
+        talkButton.disabled = !SpeechRecognition;
+        sendButton.disabled = false;
+        refreshButton.disabled = false;
+    }
+    
+    // Hapus animasi CSS bawaan Pou
+    const styleTag = document.getElementById('dcoder_stylesheet');
+    if (styleTag) {
+        styleTag.textContent = styleTag.textContent.replace(/@keyframes blink {[^}]*}/g, '');
+        styleTag.textContent = styleTag.textContent.replace(/@keyframes movePupil {[^}]*}/g, '');
+        styleTag.textContent = styleTag.textContent.replace(/@keyframes mouth {[^}]*}/g, '');
+        styleTag.textContent = styleTag.textContent.replace(/animation: [^;]*;/g, ' ');
+    }
+});
+</script> 
+ </body>
+</html>
+
+// *** URL DEPLOYMENT APPS SCRIPT ANDA (URL yang Anda berikan) ***
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyu7oZrPtv841FvD6PToUgNxR0UHrjvXaKMDNkO7xoto6Pq2FS2aLGiWaXhV4QVvLHI/exec'; 
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
